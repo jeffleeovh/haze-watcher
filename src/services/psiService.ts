@@ -150,18 +150,34 @@ export class PsiService {
     source: string;
   }> {
     if (mode === 'live') {
+      // 1. Try local serverless endpoint /api/psi
       try {
-        const res = await fetch('https://api.data.gov.sg/v1/environment/psi', {
+        const res = await fetch('/api/psi', {
           headers: { Accept: 'application/json' },
         });
         if (res.ok) {
           const json = await res.json();
-          if (json.items && json.items.length > 0) {
-            return this.parseLiveNeaResponse(json);
+          if ((json.data?.items && json.data.items.length > 0) || (json.items && json.items.length > 0)) {
+            return this.parseLiveNeaResponse(json, 'Data.gov.sg v2 Real-time API (/api/psi)');
           }
         }
       } catch (e) {
-        console.info('Live NEA API unavailable or blocked by CORS, falling back to real-time ambient stream:', e);
+        console.info('/api/psi route unreachable, trying direct upstream endpoint:', e);
+      }
+
+      // 2. Direct upstream fallback to data.gov.sg v2
+      try {
+        const res = await fetch('https://api-open.data.gov.sg/v2/real-time/api/psi', {
+          headers: { Accept: 'application/json' },
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if ((json.data?.items && json.data.items.length > 0) || (json.items && json.items.length > 0)) {
+            return this.parseLiveNeaResponse(json, 'Data.gov.sg v2 (Direct Upstream)');
+          }
+        }
+      } catch (e) {
+        console.info('Live NEA API unavailable or blocked by CORS, falling back to simulated ambient baseline:', e);
       }
     }
 
@@ -170,12 +186,13 @@ export class PsiService {
   }
 
   /**
-   * Parses live data from data.gov.sg NEA API format
+   * Parses live data from data.gov.sg NEA API format (v2 and v1 compatible)
    */
-  private static parseLiveNeaResponse(json: any) {
-    const item = json.items[0];
+  private static parseLiveNeaResponse(json: any, sourceLabel: string = 'Data.gov.sg (NEA Official Live Stream)') {
+    const item = json.data?.items ? json.data.items[0] : json.items[0];
     const readings = item.readings;
-    const timestamp = new Date(item.timestamp).toLocaleTimeString('en-SG', {
+    const rawTimestamp = item.updatedTimestamp || item.timestamp;
+    const timestamp = new Date(rawTimestamp).toLocaleTimeString('en-SG', {
       hour: '2-digit',
       minute: '2-digit',
       day: 'numeric',
@@ -185,10 +202,25 @@ export class PsiService {
     const regionKeys: RegionId[] = ['national', 'north', 'south', 'east', 'west', 'central'];
     const regions: Record<RegionId, RegionData> = {} as any;
 
+    // In case national reading is not present in v2 readings, calculate from the 5 regions
+    const regionalPsiValues = ['north', 'south', 'east', 'west', 'central'].map(
+      (k) => readings.psi_twenty_four_hourly?.[k] ?? 45
+    );
+    const calculatedNationalPsi = Math.max(...regionalPsiValues);
+
+    const regionalPm25Values = ['north', 'south', 'east', 'west', 'central'].map(
+      (k) => readings.pm25_one_hourly?.[k] ?? readings.pm25_twenty_four_hourly?.[k] ?? 16
+    );
+    const calculatedNationalPm25 = Math.max(...regionalPm25Values);
+
     regionKeys.forEach((key) => {
-      const psi24Hr = readings.psi_twenty_four_hourly?.[key] ?? 45;
-      const pm25_1Hr = readings.pm25_one_hourly?.[key] ?? 16;
-      const pm25_24Hr = readings.pm25_twenty_four_hourly?.[key] ?? 15;
+      const isNational = key === 'national';
+      const psi24Hr = readings.psi_twenty_four_hourly?.[key] ?? (isNational ? calculatedNationalPsi : 45);
+      const pm25_1Hr =
+        readings.pm25_one_hourly?.[key] ??
+        readings.pm25_twenty_four_hourly?.[key] ??
+        (isNational ? calculatedNationalPm25 : 16);
+      const pm25_24Hr = readings.pm25_twenty_four_hourly?.[key] ?? (isNational ? calculatedNationalPm25 : 15);
       const pm10_24Hr = readings.pm10_twenty_four_hourly?.[key] ?? 28;
       const so2_24Hr = readings.so2_twenty_four_hourly?.[key] ?? 8;
       const no2_1Hr = readings.no2_one_hour_max?.[key] ?? 22;
@@ -241,7 +273,7 @@ export class PsiService {
       trend: this.generateTrend(regions.national.psi24Hr),
       stations,
       timestamp,
-      source: 'Data.gov.sg (NEA Official Live Stream)',
+      source: sourceLabel,
     };
   }
 
