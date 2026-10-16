@@ -1,0 +1,6 @@
+{
+  "name": "Singapore Air Quality & PSI Live Radar",
+  "description": "Live Singapore PSI (Pollutant Standards Index) and PM2.5 monitoring dashboard with interactive regional map, haze hotspot tracking, customizable threshold alerts, and push notifications.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
